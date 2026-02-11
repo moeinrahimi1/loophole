@@ -1,10 +1,15 @@
-// client.js
+// client-tls.js
 const net = require("net");
+const tls = require("tls");
+const fs = require("fs");
 
 const LOCAL_PORT = Number(process.env.LOCAL_PORT || 5000);
 const SERVER_HOST = process.env.SERVER_HOST || "127.0.0.1";
 const SERVER_PORT = Number(process.env.SERVER_PORT || 7000);
 const STATS_INTERVAL_MS = Number(process.env.STATS_INTERVAL_MS || 2000);
+
+// Optional CA cert (for real TLS validation)
+const CA_CERT = process.env.CA_CERT || null;
 
 let connIdSeq = 0;
 
@@ -21,6 +26,13 @@ function fmtBytes(n) {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+const tlsOptions = {
+  host: SERVER_HOST,
+  port: SERVER_PORT,
+  rejectUnauthorized: false, // self-signed mode
+  ...(CA_CERT ? { ca: fs.readFileSync(CA_CERT) } : {}),
+};
+
 const localServer = net.createServer((localSocket) => {
   const id = ++connIdSeq;
   setSocketOpts(localSocket);
@@ -28,23 +40,18 @@ const localServer = net.createServer((localSocket) => {
   const localAddr = `${localSocket.remoteAddress}:${localSocket.remotePort}`;
   console.log(`[client#${id}] local connection from ${localAddr}`);
 
-  let inBytes = 0;  // local -> tunnel
-  let outBytes = 0; // tunnel -> local
+  let inBytes = 0;
+  let outBytes = 0;
 
-  const tunnelSocket = net.connect({ host: SERVER_HOST, port: SERVER_PORT }, () => {
+  const tunnelSocket = tls.connect(tlsOptions, () => {
     setSocketOpts(tunnelSocket);
 
     console.log(
-      `[client#${id}] tunnel connected to ${SERVER_HOST}:${SERVER_PORT}`
+      `[client#${id}] TLS tunnel connected to ${SERVER_HOST}:${SERVER_PORT}`
     );
 
-    localSocket.on("data", (chunk) => {
-      inBytes += chunk.length;
-    });
-
-    tunnelSocket.on("data", (chunk) => {
-      outBytes += chunk.length;
-    });
+    localSocket.on("data", (chunk) => (inBytes += chunk.length));
+    tunnelSocket.on("data", (chunk) => (outBytes += chunk.length));
 
     localSocket.pipe(tunnelSocket);
     tunnelSocket.pipe(localSocket);
@@ -79,8 +86,8 @@ const localServer = net.createServer((localSocket) => {
   });
 });
 
-localServer.listen(LOCAL_PORT, "127.0.0.1", () => {
+localServer.listen(LOCAL_PORT, "0.0.0.0", () => {
   console.log(
-    `[client] listening on 127.0.0.1:${LOCAL_PORT} -> tunnel ${SERVER_HOST}:${SERVER_PORT}`
+    `[client] listening on 0.0.0.0:${LOCAL_PORT} -> TLS tunnel ${SERVER_HOST}:${SERVER_PORT}`
   );
 });
